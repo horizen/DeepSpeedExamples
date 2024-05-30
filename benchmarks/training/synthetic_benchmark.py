@@ -8,7 +8,8 @@ import numpy as np
 import torch.distributed as dist
 import os
 import time
-
+import nvidia_dlprof_pytorch_nvtx
+nvidia_dlprof_pytorch_nvtx.init()
 
 def synthetic_parser():
     parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -93,4 +94,5 @@ if __name__ == "__main__":
 
     dist.init_process_group("nccl")
 
-    main(args)
+    with torch.autograd.profiler.emit_nvtx():
+        main(args)
