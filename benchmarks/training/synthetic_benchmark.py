@@ -8,6 +8,7 @@ import numpy as np
 import torch.distributed as dist
 import os
 import time
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 def synthetic_parser():
     parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -59,6 +60,7 @@ def main(args):
     model = getattr(models, args.model)()
 
     model.cuda()
+    model = DDP(model)
 
     optimizer = optim.SGD(model.parameters(), lr=0.01 * world_size)
 
@@ -69,7 +71,7 @@ def main(args):
 
     log('Model: %s' % args.model)
     log('Batch size: %d' % args.batch_size)
-    log('Number of GPU: %d' % world_size)
+    log('Number of GPU: %d/%d' % (dist.get_rank(), world_size))
 
     # Warm-up
     log('Running warmup...')
@@ -87,6 +89,7 @@ def main(args):
         img_sec = args.batch_size * args.num_batches_per_iter / (end-start)
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, "GPU"))
         img_secs.append(img_sec)
+        torch.cuda.nvtx.range_pop()
     torch.cuda.cudart().cudaProfilerStop()
     # Results
     img_sec_mean = np.mean(img_secs)
