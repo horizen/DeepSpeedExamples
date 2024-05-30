@@ -1,3 +1,4 @@
+from torch.nn.parallel import DistributedDataParallel as DDP
 import argparse
 import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
@@ -8,7 +9,6 @@ import numpy as np
 import torch.distributed as dist
 import os
 import time
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 def synthetic_parser():
     parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -19,28 +19,32 @@ def synthetic_parser():
     parser.add_argument('--batch-size', type=int, default=32,
                     help='input batch size')
 
-    parser.add_argument('--num-warmup-batches', type=int, default=10,
+    parser.add_argument('--num-warmup', type=int, default=5,
                     help='number of warm-up batches that don\'t count towards benchmark')
-    parser.add_argument('--num-batches-per-iter', type=int, default=10,
-                    help='number of batches per benchmark iteration')
-    parser.add_argument('--num-iters', type=int, default=10,
+    parser.add_argument('--num-iters', type=int, default=15,
                     help='number of benchmark iterations')
 
     return parser
 
 
-def benchmark_step(model, optimizer, data, target):
+def benchmark_step(model, optimizer, data, target, profiler):
     optimizer.zero_grad()
-    torch.cuda.nvtx.range_push("forward")
+    if profiler:
+        torch.cuda.nvtx.range_push("forward")
     output = model(data)
-    torch.cuda.nvtx.range_pop()
+    if profiler:
+        torch.cuda.nvtx.range_pop()
     loss = F.cross_entropy(output, target)
-    torch.cuda.nvtx.range_push("backward")
+    if profiler:
+        torch.cuda.nvtx.range_push("backward")
     loss.backward()
-    torch.cuda.nvtx.range_pop()
-    torch.cuda.nvtx.range_push("opt.step()")
+    if profiler:
+        torch.cuda.nvtx.range_pop()
+    if profiler:
+        torch.cuda.nvtx.range_push("opt.step()")
     optimizer.step()
-    torch.cuda.nvtx.range_pop()
+    if profiler:
+        torch.cuda.nvtx.range_pop()
 
 
 def log(s, nl=True):
@@ -71,25 +75,24 @@ def main(args):
 
     log('Model: %s' % args.model)
     log('Batch size: %d' % args.batch_size)
-    log('Number of GPU: %d/%d' % (dist.get_rank(), world_size))
-
-    # Warm-up
-    log('Running warmup...')
-    benchmark_step(model, optimizer, data, target)
+    log('Number of GPU: %d' % world_size)
 
     # Benchmark
     log('Running benchmark...')
     img_secs = []
-    torch.cuda.cudart().cudaProfilerStart()
     for x in range(args.num_iters):
-        torch.cuda.nvtx.range_push("iteration{}".format(x))
+        if x == args.num_warmup:
+            torch.cuda.cudart().cudaProfilerStart()
+        if x >= args.num_warmup:
+            torch.cuda.nvtx.range_push("rank{}-iteration{}".format(dist.get_rank(), x))
         start = time.time()
-        benchmark_step(model, optimizer, data, target)
+        benchmark_step(model, optimizer, data, target, x >= args.num_warmup)
         end = time.time()
-        img_sec = args.batch_size * args.num_batches_per_iter / (end-start)
+        img_sec = args.batch_size / (end-start)
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, "GPU"))
         img_secs.append(img_sec)
-        torch.cuda.nvtx.range_pop()
+        if x >= args.num_warmup:
+            torch.cuda.nvtx.range_pop()
     torch.cuda.cudart().cudaProfilerStop()
     # Results
     img_sec_mean = np.mean(img_secs)
@@ -103,5 +106,5 @@ if __name__ == "__main__":
 
     dist.init_process_group("nccl")
 
-    with torch.autograd.profiler.emit_nvtx():
-        main(args)
+    main(args)
+    dist.destroy_process_group()
