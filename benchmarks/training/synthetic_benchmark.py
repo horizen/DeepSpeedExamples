@@ -4,10 +4,10 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data.distributed
 from torchvision import models
-import timeit
 import numpy as np
 import torch.distributed as dist
 import os
+import time
 
 
 def synthetic_parser():
@@ -68,14 +68,16 @@ def main(args):
 
     # Warm-up
     log('Running warmup...')
-    timeit.timeit(benchmark_step, number=args.num_warmup_batches, globals={'model': model, 'optimizer': optimizer, 'data': data, 'target': target})
+    benchmark_step(model, optimizer, data, target)
 
     # Benchmark
     log('Running benchmark...')
     img_secs = []
     for x in range(args.num_iters):
-        time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter, globals={'model': model, 'optimizer': optimizer, 'data': data, 'target': target})
-        img_sec = args.batch_size * args.num_batches_per_iter / time
+        start = time.time()
+        benchmark_step(model, optimizer, data, target)
+        end = time.time()
+        img_sec = args.batch_size * args.num_batches_per_iter / (end-start)
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, "GPU"))
         img_secs.append(img_sec)
 
