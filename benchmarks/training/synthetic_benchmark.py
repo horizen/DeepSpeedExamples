@@ -8,8 +8,6 @@ import numpy as np
 import torch.distributed as dist
 import os
 import time
-import nvidia_dlprof_pytorch_nvtx
-nvidia_dlprof_pytorch_nvtx.init()
 
 def synthetic_parser():
     parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -32,10 +30,16 @@ def synthetic_parser():
 
 def benchmark_step(model, optimizer, data, target):
     optimizer.zero_grad()
+    torch.cuda.nvtx.range_push("forward")
     output = model(data)
+    torch.cuda.nvtx.range_pop()
     loss = F.cross_entropy(output, target)
+    torch.cuda.nvtx.range_push("backward")
     loss.backward()
+    torch.cuda.nvtx.range_pop()
+    torch.cuda.nvtx.range_push("opt.step()")
     optimizer.step()
+    torch.cuda.nvtx.range_pop()
 
 
 def log(s, nl=True):
@@ -74,14 +78,16 @@ def main(args):
     # Benchmark
     log('Running benchmark...')
     img_secs = []
+    torch.cuda.cudart().cudaProfilerStart()
     for x in range(args.num_iters):
+        torch.cuda.nvtx.range_push("iteration{}".format(x))
         start = time.time()
         benchmark_step(model, optimizer, data, target)
         end = time.time()
         img_sec = args.batch_size * args.num_batches_per_iter / (end-start)
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, "GPU"))
         img_secs.append(img_sec)
-
+    torch.cuda.cudart().cudaProfilerStop()
     # Results
     img_sec_mean = np.mean(img_secs)
     img_sec_conf = 1.96 * np.std(img_secs)
