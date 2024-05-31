@@ -202,6 +202,20 @@ def parse_args():
     return args
 
 
+import transformers
+from transformers import (
+    DataCollatorForSeq2Seq,
+    HfArgumentParser,
+    LlamaTokenizer,
+    AutoTokenizer,
+    AutoConfig,
+    LlamaConfig,
+    Seq2SeqTrainer,
+    Seq2SeqTrainingArguments,
+    default_data_collator,
+    set_seed,
+)
+
 def main():
     args = parse_args()
 
@@ -389,6 +403,7 @@ def main():
                                   args.output_dir,
                                   zero_stage=args.zero_stage)
 
+    Seq2SeqTrainer
 
 if __name__ == "__main__":
     main()
