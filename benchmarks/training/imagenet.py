@@ -1,6 +1,8 @@
 import torch
 import argparse
 import torch.backends.cudnn as cudnn
+import torch.distributed
+import torch.distributed.run
 import torch.multiprocessing as mp
 import torch.nn.functional as F
 import torch.optim as optim
@@ -10,6 +12,9 @@ from torchvision import datasets, transforms, models
 import os
 import math
 from tqdm import tqdm
+from torch.nn.parallel import DistributedDataParallel as DDP
+import torch.distributed as dist
+import torch.nn.modules.module as m
 
 # Training settings
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Example',
@@ -20,16 +25,10 @@ parser.add_argument('--val-dir', default=os.path.expanduser('~/imagenet/validati
                     help='path to validation data')
 parser.add_argument('--log-dir', default='./logs',
                     help='tensorboard log directory')
-parser.add_argument('--checkpoint-format', default='./checkpoint-{epoch}.pth.tar',
-                    help='checkpoint file format')
-parser.add_argument('--fp16-allreduce', action='store_true', default=False,
-                    help='use fp16 compression during allreduce')
 parser.add_argument('--batches-per-allreduce', type=int, default=1,
                     help='number of batches processed locally before '
                          'executing allreduce across workers; it multiplies '
                          'total batch size.')
-parser.add_argument('--use-adasum', action='store_true', default=False,
-                    help='use adasum algorithm to do reduction')
 parser.add_argument('--gradient-predivide-factor', type=float, default=1.0,
                     help='apply gradient predivide factor in optimizer (default: 1.0)')
 
@@ -49,8 +48,6 @@ parser.add_argument('--momentum', type=float, default=0.9,
 parser.add_argument('--wd', type=float, default=0.00005,
                     help='weight decay')
 
-parser.add_argument('--no-cuda', action='store_true', default=False,
-                    help='disables CUDA training')
 parser.add_argument('--seed', type=int, default=42,
                     help='random seed')
 
@@ -67,8 +64,7 @@ def train(epoch):
         for batch_idx, (data, target) in enumerate(train_loader):
             adjust_learning_rate(epoch, batch_idx)
 
-            if args.cuda:
-                data, target = data.cuda(), target.cuda()
+            data, target = data.cuda(), target.cuda()
             optimizer.zero_grad()
             # Split data into sub-batches of size batch_size
             for i in range(0, len(data), args.batch_size):
@@ -102,8 +98,7 @@ def validate(epoch):
               disable=not verbose) as t:
         with torch.no_grad():
             for data, target in val_loader:
-                if args.cuda:
-                    data, target = data.cuda(), target.cuda()
+                data, target = data.cuda(), target.cuda()
                 output = model(data)
 
                 val_loss.update(F.cross_entropy(output, target))
@@ -161,7 +156,7 @@ class Metric(object):
         self.n = torch.tensor(0.)
 
     def update(self, val):
-        self.sum += hvd.allreduce(val.detach().cpu(), name=self.name)
+        self.sum += dist.all_reduce(val.detach().cpu())
         self.n += 1
 
     @property
@@ -178,15 +173,12 @@ if __name__ == '__main__':
     rank = dist.get_rank()
     local_rank = int(os.environ["LOCAL_RANK"])
 
-    args.cuda = not args.no_cuda and torch.cuda.is_available()
-
     allreduce_batch_size = args.batch_size * args.batches_per_allreduce
 
     torch.manual_seed(args.seed)
 
-    if args.cuda:
-        torch.cuda.set_device(local_rank)
-        torch.cuda.manual_seed(args.seed)
+    torch.cuda.set_device(local_rank)
+    torch.cuda.manual_seed(args.seed)
 
     cudnn.benchmark = True
 
@@ -198,7 +190,7 @@ if __name__ == '__main__':
     # Horovod: limit # of CPU threads to be used per worker.
     torch.set_num_threads(4)
 
-    kwargs = {'num_workers': 4, 'pin_memory': True} if args.cuda else {}
+    kwargs = {'num_workers': 4, 'pin_memory': True} 
     # When supported, use 'forkserver' to spawn dataloader workers instead of 'fork' to prevent
     # issues with Infiniband implementations that are not fork-safe
     if (kwargs.get('num_workers', 0) > 0 and hasattr(mp, '_supports_context') and
@@ -238,11 +230,11 @@ if __name__ == '__main__':
 
     # Set up standard ResNet-50 model.
     model = models.resnet50()
-
+    model = model.cuda()
+    model = DDP(model)
     optimizer = optim.SGD(model.parameters(),
                           lr=args.base_lr,
                           momentum=args.momentum, weight_decay=args.wd)
-
 
     for epoch in range(args.epochs):
         train(epoch)
