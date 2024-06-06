@@ -29,28 +29,26 @@ def synthetic_parser():
 
 def benchmark_step(model, optimizer, data, target, profiler):
     optimizer.zero_grad()
-    if profiler:
-        torch.cuda.nvtx.range_push("forward")
     output = model(data)
-    if profiler:
-        torch.cuda.nvtx.range_pop()
     loss = F.cross_entropy(output, target)
-    if profiler:
-        torch.cuda.nvtx.range_push("backward")
     loss.backward()
-    if profiler:
-        torch.cuda.nvtx.range_pop()
-    if profiler:
-        torch.cuda.nvtx.range_push("opt.step()")
     optimizer.step()
-    if profiler:
-        torch.cuda.nvtx.range_pop()
 
 
 def log(s, nl=True):
     if dist.get_rank() != 0:
         return
     print(s, end='\n' if nl else '')
+
+
+def save_checkpoint(model, optimizer):
+    if dist.get_rank() == 0:
+        filepath = 'model.cpt'
+        state = {
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+        }
+        torch.save(state, filepath)
 
 
 def main(args):
@@ -62,7 +60,6 @@ def main(args):
 
     # Set up standard model.
     model = getattr(models, args.model)()
-
     model.cuda()
     model = DDP(model)
 
@@ -81,19 +78,14 @@ def main(args):
     log('Running benchmark...')
     img_secs = []
     for x in range(args.num_iters):
-        #if x == args.num_warmup:
-        #    torch.cuda.cudart().cudaProfilerStart()
-        #if x >= args.num_warmup:
-        #    torch.cuda.nvtx.range_push("rank{}-iteration{}".format(dist.get_rank(), x))
         start = time.time()
         benchmark_step(model, optimizer, data, target, False)
         end = time.time()
         img_sec = args.batch_size / (end-start)
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, "GPU"))
         img_secs.append(img_sec)
-        #if x >= args.num_warmup:
-        #    torch.cuda.nvtx.range_pop()
-    #torch.cuda.cudart().cudaProfilerStop()
+    save_checkpoint(model, optimizer)
+
     # Results
     img_sec_mean = np.mean(img_secs)
     img_sec_conf = 1.96 * np.std(img_secs)
@@ -104,7 +96,9 @@ def main(args):
 if __name__ == "__main__":
     args = synthetic_parser().parse_args()
 
+    from profiler import pre_hook, post_hook
+    pre_hook()
     dist.init_process_group("nccl")
-
     main(args)
     dist.destroy_process_group()
+    post_hook()
