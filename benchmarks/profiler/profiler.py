@@ -43,7 +43,6 @@ def _before_forward(module, input):
     global ti_hook_step
     if ti_hook_step >= 2:
         nvtx.range_push("rank{}-epoch{}-{}-forward".format(_get_rank(), ti_hook_step, module.__class__.__name__)) 
-        
     return None
 
 
@@ -51,6 +50,8 @@ def _after_forward(module, input, output):
     global ti_hook_step
     if ti_hook_step >= 2:
         nvtx.range_pop()
+        if module.training:
+            nvtx.range_push("rank{}-epoch{}-{}-backward".format(_get_rank(), ti_hook_step, module.__class__.__name__)) 
     return None
 
 
@@ -62,18 +63,11 @@ def _init_module(module, input):
     global _ti_model 
     if _ti_model is None:
         _ti_model = module
-    
         _ti_model.register_forward_pre_hook(_before_forward)
         _ti_model.register_forward_hook(_after_forward)
         _ti_model.register_state_dict_pre_hook(_before_module_state_dict)
         _ti_model._register_state_dict_hook(_range_pop4) 
     
-
-def _before_backward(module, grad_output):
-    global ti_hook_step
-    nvtx.range_push("rank{}-epoch{}-{}-backward".format(_get_rank(), ti_hook_step, module.__class__.__name__)) 
-    return None
-
 
 def _before_optim_state_dict(optimizer, state_dict):
     global ti_hook_step
@@ -84,6 +78,7 @@ def _before_optim_state_dict(optimizer, state_dict):
 def _before_step(optimizer, args, kwargs):
     global ti_hook_step
     if ti_hook_step >= 2:
+        nvtx.range_pop()
         nvtx.range_push("rank{}-epoch{}-{}-step".format(_get_rank(), ti_hook_step, optimizer.__class__.__name__)) 
         if Version(torch.__version__) >= Version("2.3.0"):
             optimizer.register_state_dict_pre_hook(_before_optim_state_dict)
