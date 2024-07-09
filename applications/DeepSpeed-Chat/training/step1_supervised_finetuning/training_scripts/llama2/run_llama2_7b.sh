@@ -13,10 +13,18 @@ if [ "$ZERO_STAGE" == "" ]; then
 fi
 mkdir -p $OUTPUT
 
-deepspeed main.py \
-   --data_path Dahoas/rm-static Dahoas/full-hh-rlhf Dahoas/synthetic-instruct-gptj-pairwise yitingxie/rlhf-reward-datasets \
+
+MASTER_ADDR=${MASTER_ADDR:-localhost}
+MASTER_PORT=${MASTER_PORT:-23456}
+NODE_NUM=${NODE_NUM:-1}
+NODE_RANK=${RANK:-0}
+GPU_NUM_PER_NODE=${GPU_NUM_PER_NODE:-$(nvidia-smi -L | wc -l)}
+
+torchrun --nnodes=$NODE_NUM --nproc_per_node=$GPU_NUM_PER_NODE --node_rank $NODE_RANK --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
+   training/step1_supervised_finetuning/main.py \
+   --data_path ~/imagenet2/Dahoas/rm-static \
    --data_split 2,4,4 \
-   --model_name_or_path meta-llama/Llama-2-7b-hf \
+   --model_name_or_path ~/model/Llama-2-7b-hf \
    --per_device_train_batch_size 4 \
    --per_device_eval_batch_size 4 \
    --max_seq_len 512 \
@@ -30,5 +38,5 @@ deepspeed main.py \
    --gradient_checkpointing \
    --zero_stage $ZERO_STAGE \
    --deepspeed \
-   --output_dir $OUTPUT \
-   &> $OUTPUT/training.log
+   --print_loss \
+   --output_dir $OUTPUT

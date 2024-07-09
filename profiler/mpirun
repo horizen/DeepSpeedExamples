@@ -1,0 +1,50 @@
+#!/bin/bash
+
+./pre_check.sh
+
+task_id=${TI_INSTANCE_ID:-tmp}
+rank=${INDEX:-0}
+save_dir="/tmp/$task_id"
+mkdir -p $save_idr
+
+if [[ $TI_PROFILER == "nsys" ]]; then
+  profiler_args="nsys profile -t cuda,nvtx,osrt \
+                --capture-range=cudaProfilerApi -s cpu --cudabacktrace=true \
+                --nic-metrics=true \
+                -x true -w true \
+                -o $save_dir/profile_$rank"
+                #--python-sampling-frequency=2000 --python-backtrace=cuda --python-sampling=true \
+                #--cpuctxsw=process-tree --event-sample=system-wide --os-events=2,3,4,6 --event-sampling-interval=1000 \
+  profiler_result="$save_dir/profile_$rank.nsys-rep"
+else
+  profiler_result="$save_dir/profile_$rank.json"
+fi
+
+train_file="/tmp/hook.py"
+> $train_file
+args=$(echo "$@" | awk 'for(j=i;j<=NF;j++){printf "%s ", $j}')
+for arg in $args; do
+  if [[ "$arg" =~ ^.+\.py$ ]]; then
+    echo -e "from profiler import pre_hook, post_hook\npre_hook()" >> $train_file
+    cat $arg >> $train_file
+    echo "post_hook()" >> $train_file
+    args=$(echo "$args" | sed "s#$arg#$profiler_args $train_file#g")
+    break
+  fi
+done
+
+mpirun -x NCCL_DEBUG=INFO -x NVSHMEM_NVTX=common -X PROFILER_RESULT_FILE=$profiler_result $args
+
+if [[ -e $profiler_result ]]; then
+    # upload to cos
+    IFS=':' read -r -a creds <<< "$PROFILER_COS_CREDENTIAL"
+    coscmd config -a ${creds[1]} -s ${creds[2]} -t ${creds[3]} -r $REGION -b ${creds[0]}
+    coscmd upload $profiler_result ${profiler_result:4}
+    if [[ $? != "0" ]]; then
+        echo "failed upload profiler data to cos"
+        exit 100
+    fi
+else
+    echo "seems no profiler data generated"
+    exit 101
+fi

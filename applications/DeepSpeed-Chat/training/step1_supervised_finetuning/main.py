@@ -12,6 +12,7 @@ from torch.utils.data.distributed import DistributedSampler
 
 from transformers import (
     AutoModelForCausalLM,
+    LlamaForCausalLM,
     SchedulerType,
     default_data_collator,
     get_scheduler,
@@ -216,9 +217,11 @@ from transformers import (
     set_seed,
 )
 
+import os
 def main():
     args = parse_args()
 
+    args.local_rank = int(os.getenv("LOCAL_RANK"))
     if args.local_rank == -1:
         device = torch.device(get_accelerator().device_name())
     else:
