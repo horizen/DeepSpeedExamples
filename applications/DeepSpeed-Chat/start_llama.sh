@@ -1,0 +1,1 @@
+PYTHONPATH=. bash training/step1_supervised_finetuning/training_scripts/llama2/run_llama2_7b.sh
